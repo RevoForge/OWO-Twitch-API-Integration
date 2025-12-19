@@ -519,7 +519,7 @@ public class OwoSensationBuilderAndTester : MonoBehaviour
         // This is not needed when trying multiple suits
         var cts = new CancellationTokenSource();
         _ = OWO.AutoConnect();
-        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(10), cts.Token);
+        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(60), cts.Token);
         while (OWO.ConnectionState != ConnectionState.Connected && !timeoutTask.IsCompleted)
         {
             await Task.Delay(100);
