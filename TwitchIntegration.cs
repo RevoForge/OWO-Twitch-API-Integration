@@ -489,7 +489,7 @@ public class TwitchManager : MonoBehaviour
                 {
                     usersHaveFollowed.Add(incomingMessage.payload.eventData.user_id);
                     // Do Thing For Channel Following
-                    SendSensationBasedOnDropdown(followDropdown.itemText.text);
+                    SendSensationBasedOnDropdown(followDropdown.captionText.text);
                 }
                 else
                 {
@@ -498,7 +498,7 @@ public class TwitchManager : MonoBehaviour
             }
             if (incomingMessage.metadata.subscription_type == "channel.raid" && enableRaid)
             {
-                SendSensationBasedOnDropdown(raidDropdown.itemText.text);
+                SendSensationBasedOnDropdown(raidDropdown.captionText.text);
                 // Do Thing For Channel Raid
             }
             if (incomingMessage.metadata.subscription_type == "channel.cheer")
@@ -508,7 +508,7 @@ public class TwitchManager : MonoBehaviour
             }
             if (incomingMessage.metadata.subscription_type == "channel.subscribe" && enableSubscribe)
             {
-                SendSensationBasedOnDropdown(subscribeDropdown.itemText.text);
+                SendSensationBasedOnDropdown(subscribeDropdown.captionText.text);
                 // Do Thing For Channel Subscribe
             }
             if (incomingMessage.metadata.subscription_type == "channel.channel_points_custom_reward_redemption.add")
@@ -518,7 +518,7 @@ public class TwitchManager : MonoBehaviour
             }
             if (incomingMessage.metadata.subscription_type == "channel.hype_train.begin" && enableHype)
             {
-                SendSensationBasedOnDropdown(hypeDropdown.itemText.text);
+                SendSensationBasedOnDropdown(hypeDropdown.captionText.text);
                 // Do Thing For Hype Train
             }
         }
@@ -572,7 +572,7 @@ public class TwitchManager : MonoBehaviour
 
     public void RePopDropDowns()
     {
-        DropdownPopulator[] dropdownPopulators = FindObjectsOfType<DropdownPopulator>();
+        DropdownPopulator[] dropdownPopulators = FindObjectsByType<DropdownPopulator>(FindObjectsSortMode.None);
         foreach (DropdownPopulator dropdownPopulator in dropdownPopulators)
         {
             dropdownPopulator.PopulateDropdownWithFilenames();
@@ -580,6 +580,8 @@ public class TwitchManager : MonoBehaviour
     }
     public void SendTestButton()
     {
+        
+
         if (testRedeemInputField.text.Length > 0)
         {
             SendSensationBasedOnRedeem(testRedeemInputField.text.ToLower());
