@@ -404,7 +404,7 @@ public class TwitchManager : MonoBehaviour
             }
             if (i == 5)
             {
-                jsonPayload = $"{{\"type\":\"channel.hype_train.begin\",\"version\":\"1\",\"condition\":{{\"broadcaster_user_id\":\"{channelIDNumber}\"}},\"transport\":{{\"method\":\"websocket\",\"session_id\":\"{websocketSessionId}\"}}}}";
+                jsonPayload = $"{{\"type\":\"channel.hype_train.begin\",\"version\":\"2\",\"condition\":{{\"broadcaster_user_id\":\"{channelIDNumber}\"}},\"transport\":{{\"method\":\"websocket\",\"session_id\":\"{websocketSessionId}\"}}}}";
                 //  Debug.Log("Channel Train payload");
                 type = "Hype Train";
             }
