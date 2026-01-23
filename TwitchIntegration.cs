@@ -7,11 +7,13 @@ using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Networking;
+using UnityEngine.SocialPlatforms.Impl;
 using static OwoSensationBuilderAndTester;
 
 public class TwitchManager : MonoBehaviour
@@ -117,9 +119,15 @@ public class TwitchManager : MonoBehaviour
     }
 
     private readonly ConcurrentQueue<Action> _mainThreadActions = new();
-
+    private readonly string filePath = "TwitchOWOLogs.txt"; 
+    private string fullDebugPath;
     void Start()
     {
+        fullDebugPath = Path.Combine(Application.dataPath, filePath);
+        if (!File.Exists(fullDebugPath))
+        {
+            File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Log Start" + "\n");
+        }
         StartLocalServer();
     }
     void Update()
@@ -219,6 +227,10 @@ public class TwitchManager : MonoBehaviour
             _mainThreadActions.Enqueue(() =>
             {
                 Debug.Log("Token Failure");
+                if (debugMode)
+                {
+                    File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Token Failure" + "\n");
+                }
             });
         }
         byte[] responseBuffer = Encoding.UTF8.GetBytes("Token received.");
@@ -259,22 +271,38 @@ public class TwitchManager : MonoBehaviour
                 }
                 else
                 {
+                    if (debugMode)
+                    {
+                        File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Failed to parse user ID to an integer." + "\n");
+                    }
                     Debug.LogError("Failed to parse user ID to an integer.");
                 }
                 channelInputField.text = userName;
             }
             else
             {
+                if (debugMode)
+                {
+                    File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Received empty user data from Twitch." + "\n");
+                }
                 Debug.LogError("Received empty user data from Twitch.");
             }
         }
         else if (www.result == UnityWebRequest.Result.ConnectionError)
         {
             Debug.LogError("Connection Error: " + www.error);
+            if (debugMode)
+            {
+                File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Connection Error: " + www.error + "\n");
+            }
         }
         else if (www.result == UnityWebRequest.Result.ProtocolError)
         {
             Debug.LogError("Protocol Error: " + www.error);
+            if (debugMode)
+            {
+                File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Protocol Error: " + www.error + "\n");
+            }
         }
 
     }
@@ -283,44 +311,117 @@ public class TwitchManager : MonoBehaviour
     [SerializeField]
     private TMP_InputField testRedeemInputField;
     [SerializeField]
-    private TMP_InputField testBitsInputField;
+    private TextMeshProUGUI testBitsInputField;
     private WebSocket ws;
     public bool enableFollow = false;
     private bool enableRaid = false;
     private bool enableHype = false;
     private bool enableSubscribe = false;
-    // Connecting To Twitch for Auth Grab
+    private bool enableScalingBit = false;
     public void EnableFollow()
     {
         enableFollow = true;
+        if (debugMode)
+        {
+            try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Follow Enabled" + "\n"); }
+            catch {//ignore
+            }
+        }
     }
     public void EnableRaid()
     {
         enableRaid = true;
+        if (debugMode)
+        {
+            try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Raid Enabled" + "\n"); }
+            catch {//ignore
+            }
+        }
     }
     public void EnableHype()
     {
         enableHype = true;
+        if (debugMode)
+        {
+            try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Hype Enabled" + "\n"); }
+            catch {//ignore
+            }
+        }
     }
     public void EnableSubscribe()
     {
         enableSubscribe = true;
+        if (debugMode)
+        {
+            try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Subscribe Enabled" + "\n"); }
+            catch {//ignore
+            }
+        }
+    }
+    public void EnableScalingBit()
+    {
+        enableScalingBit = true;
+
+    }
+    public void EnableDebug()
+    {
+        debugMode = true;
+        try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Log Enabled" + "\n"); }
+        catch
+        {//ignore
+        }
     }
     public void DisableFollow()
     {
         enableFollow = false;
+        if (debugMode)
+        {
+           try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Follow Disabled" + "\n"); }
+           catch {//ignore
+           }
+        }
     }
     public void DisableRaid()
     {
         enableRaid = false;
+        if (debugMode)
+        {
+            try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Raid Disabled" + "\n"); }
+            catch {//ignore
+            }
+        }
     }
     public void DisableHype()
     {
         enableHype = false;
+        if (debugMode)
+        {
+            try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Hype Disabled" + "\n"); }
+            catch {//ignore
+            }
+        }
     }
     public void DisableSubscribe()
     {
         enableSubscribe = false;
+        if (debugMode)
+        {
+            try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Subscribe Disabled" + "\n"); }
+            catch {//ignore
+            }
+        }
+    }
+    public void DisableScalingBit()
+    {
+        enableScalingBit = false;
+    }
+    public void DisableDebug()
+    {
+        debugMode = false;
+        try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Log Disabled" + "\n"); }
+        catch
+        {//ignore
+        }
     }
     public void InitiateOAuth()
     {
@@ -367,6 +468,10 @@ public class TwitchManager : MonoBehaviour
         {
             if (channelIDNumber <= 0 || string.IsNullOrEmpty(websocketSessionId))
             {
+                if (debugMode)
+                {
+                    File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Invalid channel ID number or websocket session ID." + "\n");
+                }
                 Debug.LogError("Invalid channel ID number or websocket session ID.");
                 break;  // Exit the loop if conditions are not met
             }
@@ -425,6 +530,7 @@ public class TwitchManager : MonoBehaviour
             if (request.result == UnityWebRequest.Result.Success)
             {
                 Debug.Log($"EventSub {type} successful.");
+                //debugText.text += $"EventSub {type} successful.\n";
             }
             else
             {
@@ -435,6 +541,7 @@ public class TwitchManager : MonoBehaviour
 
     }
     public TMP_Text connectionText;
+    public TextMeshProUGUI minBitValueText;
     private void HandleOpen()
     {
         // LogEntry("Connected to Twitch PubSub");
@@ -443,110 +550,167 @@ public class TwitchManager : MonoBehaviour
        // StartCoroutine(WebSocketPayload());
     }
     private List<string> usersHaveFollowed = new();
-    public string filePath = "TwitchMessageLogs.txt"; // Path to the file, relative to the project folder
-    public string textToSave = "Log Start";
-    public string textToAppend = "New line of text!";
+
+    private bool debugMode = false;
     private void HandleMessage(byte[] bytes)
     {
         var messageStr = Encoding.UTF8.GetString(bytes);
+
+
         TwitchResponseData incomingMessage = JsonConvert.DeserializeObject<TwitchResponseData>(messageStr);
 
-        if (Debug.isDebugBuild)
+        if (incomingMessage.metadata.message_type != "session_keepalive" && debugMode)
         {
-            string fullPath = Path.Combine(Application.dataPath, filePath);
-
-            try
-            {
-                // Check if the file exists
-                if (!File.Exists(fullPath))
-                {
-                    // Create the file if it doesn't exist
-                    using StreamWriter sw = File.CreateText(fullPath);
-                    // Write the initial text to the file
-                    sw.WriteLine(textToSave);
-                }
-                else
-                {
-                    // Append text to an existing file
-                    File.AppendAllText(fullPath, textToAppend + "\n"); // Adding a newline after each appended text
-                }
-            }
-            catch (Exception e)
-            {
-                Debug.LogError("Error handling file: " + e.Message);
-            }
-
+            File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " " + messageStr + "\n"); 
         }
         if (incomingMessage.metadata.message_type == "notification")
         {
-            if (Debug.isDebugBuild)
+            if (incomingMessage.metadata.subscription_type == "channel.follow")
             {
-                // Code here will only run in development builds (including Unity Editor)
-            }
-            if (incomingMessage.metadata.subscription_type == "channel.follow" && enableFollow)
-            {
-                if (!usersHaveFollowed.Contains(incomingMessage.payload.eventData.user_id))
+                if (enableFollow)
                 {
-                    usersHaveFollowed.Add(incomingMessage.payload.eventData.user_id);
-                    // Do Thing For Channel Following
-                    SendSensationBasedOnDropdown(followDropdown.captionText.text);
+                    if (!usersHaveFollowed.Contains(incomingMessage.payload.eventData.user_id))
+                    {
+                        usersHaveFollowed.Add(incomingMessage.payload.eventData.user_id);
+                        SendSensationBasedOnDropdown(followDropdown.captionText.text);
+                        if (debugMode)
+                        {
+                            File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Follow Sensation Sent" + "\n");
+                        }
+                    }
+                    else
+                    {
+                        if (debugMode)
+                        {
+                            File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " User already followed this session" + "\n");
+                        }
+                    }
                 }
-                else
+                else if (debugMode)
                 {
-                    // User already followed this session
+                        File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Follows Sensation is Disabled" + "\n");
                 }
             }
-            if (incomingMessage.metadata.subscription_type == "channel.raid" && enableRaid)
+            if (incomingMessage.metadata.subscription_type == "channel.raid")
             {
-                SendSensationBasedOnDropdown(raidDropdown.captionText.text);
-                // Do Thing For Channel Raid
+                if (enableRaid)
+                {
+                    SendSensationBasedOnDropdown(raidDropdown.captionText.text);
+                    if (debugMode)
+                    {
+                        File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Raid Sensation Sent" + "\n");
+                    }
+                }
+                else if (debugMode)
+                {
+                        File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Raid Sensation is Disabled" + "\n");
+                }
             }
             if (incomingMessage.metadata.subscription_type == "channel.cheer")
             {
-                // Do the Bit Thing
-                SendSensationBasedOnBits(int.Parse(incomingMessage.payload.eventData.bits));
+                static string Clean(string s) => new(s.Where(char.IsDigit).ToArray());
+                int bitValue = int.Parse(incomingMessage.payload.eventData.bits);
+                int minBitValue = int.Parse(Clean(minBitValueText.text));
+                if (!enableScalingBit)
+                {
+                    SendSensationBasedOnBits(bitValue);
+                    if (debugMode)
+                    {
+                        File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Bit Sensation Sent" + "\n");
+                    }
+                }
+                else if (bitValue >= minBitValue)
+                {
+                    PlayFullScalingSensation(bitDropdown.captionText.text, minBitValue, bitValue);
+                    if (debugMode)
+                    {
+                        File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Bit Sensation Sent" + "\n");
+                    }
+                }
             }
-            if (incomingMessage.metadata.subscription_type == "channel.subscribe" && enableSubscribe)
+            if (incomingMessage.metadata.subscription_type == "channel.subscribe")
             {
-                SendSensationBasedOnDropdown(subscribeDropdown.captionText.text);
-                // Do Thing For Channel Subscribe
+                if (enableSubscribe)
+                {
+                    SendSensationBasedOnDropdown(subscribeDropdown.captionText.text);
+                    if (debugMode)
+                    {
+                        File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Subscribe Sensation Sent" + "\n");
+                    }
+                }
+                else if (debugMode)
+                {
+                    File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Subscribe Sensation is Disabled" + "\n");
+                }
             }
             if (incomingMessage.metadata.subscription_type == "channel.channel_points_custom_reward_redemption.add")
             {
-                // Do Thing For Point Redeem
                 SendSensationBasedOnRedeem(incomingMessage.payload.eventData.reward.title);
+                if (debugMode)
+                {
+                    File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Point Redeem Sensation Sent" + "\n");
+                }
             }
-            if (incomingMessage.metadata.subscription_type == "channel.hype_train.begin" && enableHype)
+            if (incomingMessage.metadata.subscription_type == "channel.hype_train.begin")
             {
-                SendSensationBasedOnDropdown(hypeDropdown.captionText.text);
-                // Do Thing For Hype Train
+                if (enableHype)
+                {
+                    SendSensationBasedOnDropdown(hypeDropdown.captionText.text);
+                    if (debugMode)
+                    {
+                        File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Hype Sensation Sent" + "\n");
+                    }
+                }
+                else if (debugMode)
+                {
+                    File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Hype Sensation is Disabled" + "\n");
+                }
             }
         }
         else if (incomingMessage.metadata.message_type == "session_welcome")
         {
+            string content =
+                    $" Twitch Session Started. " +
+                    $"Raid Enabled: {enableRaid} " +
+                    $"Follow Enabled: {enableFollow} " + 
+                    $"Scaling Bit Enabled: {enableScalingBit} " + 
+                    $"Hype Train Enabled: {enableHype} " + 
+                    $"Subscribe Enabled: {enableSubscribe}" +
+                    "\n";
             if (incomingMessage != null && incomingMessage.payload != null && incomingMessage.payload.session != null)
             {
                 websocketSessionId = incomingMessage.payload.session.id;
                 StartCoroutine(SendSubscriptionRequest());
+                if (debugMode)
+                {
+                    File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + content);
+                }
             }
             else
             {
-                Debug.LogError("Failed to extract WebSocket Session ID from the response.");
+                if (debugMode)
+                {
+                    File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Failed to extract WebSocket Session ID from the response.");
+                }
             }
 
         }
         else if (incomingMessage.metadata.message_type == "session_reconnect")
         {
             ConnectToEventSub(true, incomingMessage.payload.session.reconnect_url);
-        }
-        else if (incomingMessage.metadata.message_type != "session_keepalive")
-        {
-            Debug.Log($"Received unknown message: {messageStr}");
+            if (debugMode)
+            {
+                File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Session Reconnecting" + "\n");
+            }
         }
     }
     private void HandleError(string errorMessage)
     {
         Debug.LogError("Error with Twitch EventSub: " + errorMessage);
+        if (debugMode)
+        {
+            File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Error with Twitch EventSub: " + errorMessage + "\n");
+        }
     }
 
     private void HandleClose(WebSocketCloseCode reason)
@@ -557,6 +721,10 @@ public class TwitchManager : MonoBehaviour
             // LogEntry(closeMessage);
             
             Debug.LogError(closeMessage);
+            if (debugMode)
+            {
+                File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Disconnected from Twitch EventSub. Close Code:" + reason + "\n");
+            }
             connectionText.text = "Twitch Is Disconnected";
         });
     }
@@ -579,9 +747,12 @@ public class TwitchManager : MonoBehaviour
         }
     }
     public void SendTestButton()
-    {
-        
-
+    { /*
+        static string Clean(string s) => new(s.Where(char.IsDigit).ToArray());
+        int bitValue = int.Parse(Clean(testBitsInputField.text));
+        int minBitValue = int.Parse(Clean(minBitValueText.text));
+        PlayFullScalingSensation(bitDropdown.captionText.text, minBitValue, bitValue);
+      */
         if (testRedeemInputField.text.Length > 0)
         {
             SendSensationBasedOnRedeem(testRedeemInputField.text.ToLower());
@@ -627,6 +798,7 @@ public class TwitchManager : MonoBehaviour
     public TMP_Dropdown raidDropdown;
     public TMP_Dropdown hypeDropdown;
     public TMP_Dropdown subscribeDropdown;
+    public TMP_Dropdown bitDropdown;
 
     private readonly string saveKey1 = "SavedReddemList";
     private readonly string saveKey2 = "SavedBitList";
@@ -873,6 +1045,38 @@ public class TwitchManager : MonoBehaviour
         string jsonData = File.ReadAllText(fullPath);
         AppendedMicroSensations sensationFromJson = JsonUtility.FromJson<AppendedMicroSensations>(jsonData);
         OWO.Send(Sensation.Parse(sensationFromJson.data));
+    }
+    public void PlayFullScalingSensation(string filename,int min,int bit)
+    {
+        int finalScore = 0;
+        string[] directoryPaths =
+        {
+        "Assets/OWO/Sensation Events",
+        "Assets/OWO/MicroSensation Events"
+    };
+
+        string fullPath = FindFileInDirectories(filename, directoryPaths);
+        if (fullPath == null)
+        {
+            // Debug.Log($"File {filename}.json does not exist in any of the directories.");
+            return;
+        }
+        string jsonData = File.ReadAllText(fullPath);
+        AppendedMicroSensations sensationFromJson = JsonUtility.FromJson<AppendedMicroSensations>(jsonData);
+        jsonData = sensationFromJson.data;
+        string[] parts = jsonData.Split(',');
+        int currentIntensity = int.Parse(parts[2]);
+        if (bit >= min)
+        {
+            double ratio = Math.Min((double)bit / min, 25.0); 
+            finalScore = (int)Math.Round(Math.Clamp(
+                currentIntensity + (ratio - 1.0) / (25.0 - 1.0) * (100 - currentIntensity),
+                currentIntensity, 100));
+        }
+        parts[2] = finalScore.ToString();
+        string sensation = string.Join(",", parts) + ",";
+
+        OWO.Send(Sensation.Parse(sensation));
     }
     public void StopOWOSensation()
     {
