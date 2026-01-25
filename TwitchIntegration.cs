@@ -1,4 +1,4 @@
-using NativeWebSocket;
+﻿using NativeWebSocket;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using OWOGame;
@@ -9,11 +9,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Text;
+using System.Threading.Tasks;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Networking;
-using UnityEngine.SocialPlatforms.Impl;
 using static OwoSensationBuilderAndTester;
 
 public class TwitchManager : MonoBehaviour
@@ -49,18 +50,18 @@ public class TwitchManager : MonoBehaviour
         public string message_id;
         public string message_type;
         public string message_timestamp;
-        public string subscription_type; 
-        public string subscription_version; 
+        public string subscription_type;
+        public string subscription_version;
     }
 
     [Serializable]
     private class Payload
     {
-        public SessionData session; 
+        public SessionData session;
         public SubscriptionData subscription;
         [JsonProperty("event")] // Map "event" JSON property to eventData member
         public EventData eventData;
-        public SessionData session_reconnect; 
+        public SessionData session_reconnect;
     }
 
     [Serializable]
@@ -117,10 +118,31 @@ public class TwitchManager : MonoBehaviour
     {
         public string title;
     }
+    [Serializable]
+    public class TwitchTokenResponse
+    {
+        public string access_token;
+        public string refresh_token;
+        public int expires_in;
+        public string[] scope;
+        public string token_type;
+    }
+    [Serializable]
+    public class TwitchValidateResponse
+    {
+        public string login;
+        public string user_id;
+        public int expires_in;
+        public string[] scopes;
+    }
+
+
 
     private readonly ConcurrentQueue<Action> _mainThreadActions = new();
-    private readonly string filePath = "TwitchOWOLogs.txt"; 
+    private readonly string filePath = "TwitchOWOLogs.txt";
     private string fullDebugPath;
+    private readonly string clientId = TwitchSecret.clientId;
+    private readonly string clientSecret = TwitchSecret.clientSecret;
     void Start()
     {
         fullDebugPath = Path.Combine(Application.dataPath, filePath);
@@ -132,6 +154,13 @@ public class TwitchManager : MonoBehaviour
     }
     void Update()
     {
+        if (!isRefreshing && hasTokenTimer)
+        {
+            if (DateTime.UtcNow >= tokenExpiresAt.AddMinutes(-5))
+            {
+                _ = RefreshAccessTokenAsync();
+            }
+        }
         while (_mainThreadActions.TryDequeue(out var action))
         {
             action.Invoke();
@@ -148,7 +177,6 @@ public class TwitchManager : MonoBehaviour
 
         HttpListener listener = new();
         listener.Prefixes.Add("http://localhost:12345/callback/");
-        listener.Prefixes.Add("http://localhost:12345/storeToken/");
         listener.Start();
         listener.BeginGetContext(OnHttpRequestReceived, listener);
 
@@ -159,86 +187,164 @@ public class TwitchManager : MonoBehaviour
     {
         var listener = (HttpListener)result.AsyncState;
         var context = listener.EndGetContext(result);
-        if (context.Request.Url.AbsolutePath == "/storeToken/")
-        {
-            HandleTokenRequest(context);
-            return;
-        }
-        string responseString = @"
-<html>
-<body>
-<script>
-  window.onload = function() {
-    const fragment = window.location.hash.substring(1);
-    const params = new URLSearchParams(fragment);
-    const accessToken = params.get('access_token');
-    if (accessToken) {
-      fetch('http://localhost:12345/storeToken/', {
-        method: 'POST',
-        body: JSON.stringify({ token: accessToken }),
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      }).then(() => {
-        // Close the window after sending the token
-        window.close();
-      });
-    } else {
-      // Optionally, close the window even if no token is found
-      window.close();
-    }
-  }
-</script>
-</body>
-</html>";
 
-        byte[] buffer = Encoding.UTF8.GetBytes(responseString);
-        context.Response.ContentLength64 = buffer.Length;
-        var output = context.Response.OutputStream;
-        output.Write(buffer, 0, buffer.Length);
-        output.Close();
+        if (context.Request.Url.AbsolutePath == "/callback/")
+        {
+            string code = context.Request.QueryString["code"];
+
+            if (!string.IsNullOrEmpty(code))
+            {
+                _ = ExchangeCodeForTokenAsync(code);
+                WriteHtmlResponse(context.Response, GetCloseWindowHtml());
+
+            }
+            else
+            {
+                WriteHtmlResponse(context.Response, "<h3>Authorization failed</h3>");
+            }
+        }
 
         listener.BeginGetContext(OnHttpRequestReceived, listener);
     }
-    private string savedToken;
-    void HandleTokenRequest(HttpListenerContext context)
+    void WriteHtmlResponse(HttpListenerResponse response, string html)
     {
-        Stream body = context.Request.InputStream;
-        System.Text.Encoding encoding = context.Request.ContentEncoding;
-        StreamReader reader = new(body, encoding);
-
-        string data = reader.ReadToEnd();
-
-        TokenData tokenData = JsonUtility.FromJson<TokenData>(data);
-        var token = tokenData.token;
-
-        if (!string.IsNullOrEmpty(token))
-        {
-            _mainThreadActions.Enqueue(() =>
-            {
-                // ConnectToPubSub(token);
-                savedToken = token;
-                FetchUserData(savedToken);
-                Debug.Log("Token Success");
-            });
-        }
-        else
-        {
-            _mainThreadActions.Enqueue(() =>
-            {
-                Debug.Log("Token Failure");
-                if (debugMode)
-                {
-                    File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Token Failure" + "\n");
-                }
-            });
-        }
-        byte[] responseBuffer = Encoding.UTF8.GetBytes("Token received.");
-        context.Response.ContentLength64 = responseBuffer.Length;
-        var responseOutput = context.Response.OutputStream;
-        responseOutput.Write(responseBuffer, 0, responseBuffer.Length);
-        responseOutput.Close();
+        byte[] buffer = Encoding.UTF8.GetBytes(html);
+        response.ContentType = "text/html";
+        response.ContentLength64 = buffer.Length;
+        response.OutputStream.Write(buffer, 0, buffer.Length);
+        response.OutputStream.Close();
     }
+    string GetCloseWindowHtml()
+    {
+        return @"
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Authorized</title>
+</head>
+<body>
+  <p>Authorization successful. You can close this window.</p>
+
+  <script>
+    // Give Unity a moment, then close
+    setTimeout(() => {
+      window.close();
+    }, 500);
+  </script>
+</body>
+</html>";
+    }
+    async Task ExchangeCodeForTokenAsync(string code)
+    {
+
+        string redirectUri = "http://localhost:12345/callback/";
+
+        using var http = new HttpClient();
+
+        var values = new Dictionary<string, string>
+    {
+        { "client_id", clientId },
+        { "client_secret", clientSecret },
+        { "code", code },
+        { "grant_type", "authorization_code" },
+        { "redirect_uri", redirectUri }
+    };
+
+        var content = new FormUrlEncodedContent(values);
+        var response = await http.PostAsync("https://id.twitch.tv/oauth2/token", content);
+        var json = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Debug.LogError("Token exchange failed: " + json);
+            return;
+        }
+
+        var token = JsonUtility.FromJson<TwitchTokenResponse>(json);
+
+        _mainThreadActions.Enqueue(() =>
+        {
+            savedToken = token.access_token;
+            savedRefreshToken = token.refresh_token;
+            tokenExpiresAt = DateTime.UtcNow.AddSeconds(token.expires_in);
+            hasTokenTimer = true;
+            Debug.Log("OAuth SUCCESS — User token received");
+            FetchUserData(savedToken);
+        });
+    }
+    bool isRefreshing = false;
+    bool hasTokenTimer = false;
+    async Task RefreshAccessTokenAsync()
+    {
+        if (isRefreshing) return;
+        if (savedRefreshToken == null) return;
+        isRefreshing = true;
+        try
+        {
+            using var http = new HttpClient();
+
+            var values = new Dictionary<string, string>
+    {
+        { "grant_type", "refresh_token" },
+        { "refresh_token", savedRefreshToken },
+        { "client_id", clientId },
+        { "client_secret", clientSecret }
+    };
+
+            var content = new FormUrlEncodedContent(values);
+            var response = await http.PostAsync("https://id.twitch.tv/oauth2/token", content);
+            var json = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Debug.LogError("Token refresh failed: " + json);
+                return;
+            }
+
+            var token = JsonUtility.FromJson<TwitchTokenResponse>(json);
+
+            _mainThreadActions.Enqueue(() =>
+            {
+                savedToken = token.access_token;
+                savedRefreshToken = token.refresh_token; // always replace!
+                tokenExpiresAt = DateTime.UtcNow.AddSeconds(token.expires_in);
+
+                Debug.Log("Twitch token refreshed successfully");
+            });
+
+        }
+        finally
+        {
+            isRefreshing = false;
+        }
+
+    }
+    async Task ValidateTokenAsync(string token)
+    {
+        using var http = new HttpClient();
+        http.DefaultRequestHeaders.Add("Authorization", $"OAuth {token}");
+
+        var response = await http.GetAsync("https://id.twitch.tv/oauth2/validate");
+        var json = await response.Content.ReadAsStringAsync();
+
+        var data = JsonUtility.FromJson<TwitchValidateResponse>(json);
+
+        string safeLog =
+            $"Token valid | User {data.login} ({data.user_id}) | " +
+            $"expires_in={data.expires_in}s | " +
+            $"scopes=[ {string.Join(", ", data.scopes)} ]";
+
+        Debug.Log(safeLog);
+
+        if (debugMode)
+        {
+            File.AppendAllText(fullDebugPath, DateTime.Now + " " + safeLog + "\n");
+        }
+    }
+
+    private string savedToken;
+    private string savedRefreshToken;
+    private DateTime tokenExpiresAt;
     private void FetchUserData(string token)
     {
         StartCoroutine(GetUserDataCoroutine(token));
@@ -250,7 +356,7 @@ public class TwitchManager : MonoBehaviour
         string url = "https://api.twitch.tv/helix/users";
 
         using UnityWebRequest www = UnityWebRequest.Get(url);
-        www.SetRequestHeader("Client-ID", "vdawpon1s1za6ioint1wqyx3mqqhy3"); // Need your Twitch Apps id
+        www.SetRequestHeader("Client-ID", clientId); // Need your Twitch Apps id
         www.SetRequestHeader("Authorization", $"Bearer {token}");
 
         yield return www.SendWebRequest();
@@ -324,7 +430,8 @@ public class TwitchManager : MonoBehaviour
         if (debugMode)
         {
             try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Follow Enabled" + "\n"); }
-            catch {//ignore
+            catch
+            {//ignore
             }
         }
     }
@@ -334,7 +441,8 @@ public class TwitchManager : MonoBehaviour
         if (debugMode)
         {
             try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Raid Enabled" + "\n"); }
-            catch {//ignore
+            catch
+            {//ignore
             }
         }
     }
@@ -344,7 +452,8 @@ public class TwitchManager : MonoBehaviour
         if (debugMode)
         {
             try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Hype Enabled" + "\n"); }
-            catch {//ignore
+            catch
+            {//ignore
             }
         }
     }
@@ -354,7 +463,8 @@ public class TwitchManager : MonoBehaviour
         if (debugMode)
         {
             try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Subscribe Enabled" + "\n"); }
-            catch {//ignore
+            catch
+            {//ignore
             }
         }
     }
@@ -376,9 +486,10 @@ public class TwitchManager : MonoBehaviour
         enableFollow = false;
         if (debugMode)
         {
-           try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Follow Disabled" + "\n"); }
-           catch {//ignore
-           }
+            try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Follow Disabled" + "\n"); }
+            catch
+            {//ignore
+            }
         }
     }
     public void DisableRaid()
@@ -387,7 +498,8 @@ public class TwitchManager : MonoBehaviour
         if (debugMode)
         {
             try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Raid Disabled" + "\n"); }
-            catch {//ignore
+            catch
+            {//ignore
             }
         }
     }
@@ -397,7 +509,8 @@ public class TwitchManager : MonoBehaviour
         if (debugMode)
         {
             try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Hype Disabled" + "\n"); }
-            catch {//ignore
+            catch
+            {//ignore
             }
         }
     }
@@ -407,7 +520,8 @@ public class TwitchManager : MonoBehaviour
         if (debugMode)
         {
             try { File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Subscribe Disabled" + "\n"); }
-            catch {//ignore
+            catch
+            {//ignore
             }
         }
     }
@@ -425,12 +539,25 @@ public class TwitchManager : MonoBehaviour
     }
     public void InitiateOAuth()
     {
-        string authorizationEndpoint = "https://id.twitch.tv/oauth2/authorize";
-        string clientId = "vdawpon1s1za6ioint1wqyx3mqqhy3"; // Need your Twitch Apps id
+        string clientId = "vdawpon1s1za6ioint1wqyx3mqqhy3";
         string redirectUri = "http://localhost:12345/callback/";
-        string scopes = "channel:read:subscriptions+moderator:read:followers+channel:read:redemptions+bits:read+channel:read:hype_train";  // Check the specific scopes you require.
-        string fullUrl = $"{authorizationEndpoint}?client_id={clientId}&redirect_uri={redirectUri}&response_type=token&scope={scopes}";
-        Application.OpenURL(fullUrl);
+        string scopes = string.Join(" ", new[]
+        {
+        "channel:read:subscriptions",
+        "moderator:read:followers",
+        "channel:read:redemptions",
+        "bits:read",
+        "channel:read:hype_train"
+    });
+
+        string authUrl =
+            "https://id.twitch.tv/oauth2/authorize" +
+            $"?client_id={clientId}" +
+            $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
+            "&response_type=code" +
+            $"&scope={Uri.EscapeDataString(scopes)}";
+
+        Application.OpenURL(authUrl);
     }
     // EventSub Connection
     private const string EVENTSUB_ENDPOINT = "wss://eventsub.wss.twitch.tv/ws";
@@ -449,7 +576,7 @@ public class TwitchManager : MonoBehaviour
         {
             ws = new WebSocket(newEndpoint, headers);
         }
-        
+
         ws.OnOpen += HandleOpen;
         ws.OnMessage += HandleMessage;
         ws.OnError += HandleError;
@@ -458,7 +585,6 @@ public class TwitchManager : MonoBehaviour
         await ws.Connect(); // Connect to the WebSocket endpoint
     }
 
-    private readonly string twitchClientId = "vdawpon1s1za6ioint1wqyx3mqqhy3";
     private string websocketSessionId = "";
 
     private IEnumerator SendSubscriptionRequest()
@@ -521,7 +647,7 @@ public class TwitchManager : MonoBehaviour
             // Add authorization header
             request.SetRequestHeader("Authorization", "Bearer " + savedToken);
             // Add client ID header
-            request.SetRequestHeader("Client-Id", twitchClientId);
+            request.SetRequestHeader("Client-Id", clientId);
             // Set content type to JSON
             request.SetRequestHeader("Content-Type", "application/json");
 
@@ -529,8 +655,7 @@ public class TwitchManager : MonoBehaviour
 
             if (request.result == UnityWebRequest.Result.Success)
             {
-                Debug.Log($"EventSub {type} successful.");
-                //debugText.text += $"EventSub {type} successful.\n";
+
             }
             else
             {
@@ -538,16 +663,14 @@ public class TwitchManager : MonoBehaviour
                 Debug.LogError($"EventSub {type} failed: " + request.error);
             }
         }
-
+        _ = ValidateTokenAsync(savedToken);
     }
+
     public TMP_Text connectionText;
     public TextMeshProUGUI minBitValueText;
     private void HandleOpen()
     {
-        // LogEntry("Connected to Twitch PubSub");
         connectionText.text = "Twitch Is Connected";
-        // Debug.Log("Connected");
-       // StartCoroutine(WebSocketPayload());
     }
     private List<string> usersHaveFollowed = new();
 
@@ -561,7 +684,7 @@ public class TwitchManager : MonoBehaviour
 
         if (incomingMessage.metadata.message_type != "session_keepalive" && debugMode)
         {
-            File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " " + messageStr + "\n"); 
+            File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " " + messageStr + "\n");
         }
         if (incomingMessage.metadata.message_type == "notification")
         {
@@ -588,7 +711,7 @@ public class TwitchManager : MonoBehaviour
                 }
                 else if (debugMode)
                 {
-                        File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Follows Sensation is Disabled" + "\n");
+                    File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Follows Sensation is Disabled" + "\n");
                 }
             }
             if (incomingMessage.metadata.subscription_type == "channel.raid")
@@ -603,7 +726,7 @@ public class TwitchManager : MonoBehaviour
                 }
                 else if (debugMode)
                 {
-                        File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Raid Sensation is Disabled" + "\n");
+                    File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Raid Sensation is Disabled" + "\n");
                 }
             }
             if (incomingMessage.metadata.subscription_type == "channel.cheer")
@@ -672,9 +795,9 @@ public class TwitchManager : MonoBehaviour
             string content =
                     $" Twitch Session Started. " +
                     $"Raid Enabled: {enableRaid} " +
-                    $"Follow Enabled: {enableFollow} " + 
-                    $"Scaling Bit Enabled: {enableScalingBit} " + 
-                    $"Hype Train Enabled: {enableHype} " + 
+                    $"Follow Enabled: {enableFollow} " +
+                    $"Scaling Bit Enabled: {enableScalingBit} " +
+                    $"Hype Train Enabled: {enableHype} " +
                     $"Subscribe Enabled: {enableSubscribe}" +
                     "\n";
             if (incomingMessage != null && incomingMessage.payload != null && incomingMessage.payload.session != null)
@@ -719,7 +842,7 @@ public class TwitchManager : MonoBehaviour
         _mainThreadActions.Enqueue(() =>
         {
             // LogEntry(closeMessage);
-            
+
             Debug.LogError(closeMessage);
             if (debugMode)
             {
@@ -812,7 +935,7 @@ public class TwitchManager : MonoBehaviour
         if (redeemPairs.Count > 0)
         {
             // Create a list to hold serialized redeemPair objects
-            List<JObject> serializedPairs = new List<JObject>();
+            List<JObject> serializedPairs = new();
 
             // Serialize each redeemPair object in the list
             foreach (var pair in redeemPairs)
@@ -820,7 +943,7 @@ public class TwitchManager : MonoBehaviour
                 pair.UpdateValuesFromUI();
 
                 // Use JObject to create a JSON representation
-                JObject serializedPair = new JObject(
+                JObject serializedPair = new(
                     new JProperty("redeemName", pair.redeemName),
                     new JProperty("sensationDropdownValue", pair.sensationDropdownValue)
                 );
@@ -841,7 +964,7 @@ public class TwitchManager : MonoBehaviour
         if (bitPairs.Count > 0)
         {
             // Create a list to hold serialized Bitpairs objects
-            List<JObject> serializedPairs = new List<JObject>();
+            List<JObject> serializedPairs = new();
 
             // Serialize each bitpairs object in the list
             foreach (var pair in bitPairs)
@@ -849,7 +972,7 @@ public class TwitchManager : MonoBehaviour
                 pair.UpdateValuesFromUI();
 
                 // Use JObject to create a JSON representation
-                JObject serializedPair = new JObject(
+                JObject serializedPair = new(
                     new JProperty("redeemName", pair.redeemName),
                     new JProperty("sensationDropdownValue", pair.sensationDropdownValue)
                 );
@@ -879,83 +1002,83 @@ public class TwitchManager : MonoBehaviour
 
 
         int prefabCount = redeemPrefabList.Count;
-            for (int i = 0; i < prefabCount; i++)
-            {
-                SubtractRedeemPrefab();
-            }
-            string jsonData = PlayerPrefs.GetString(saveKey1, string.Empty);
-            if (string.IsNullOrEmpty(jsonData))
-            {
-                Debug.Log("Empty Redeem List"); // Return an empty list if no data saved
-            }
-            else
-            {
-                // Deserialize the JSON string into a list of JObjects
-                List<JObject> serializedPairs = JsonConvert.DeserializeObject<List<JObject>>(jsonData);
+        for (int i = 0; i < prefabCount; i++)
+        {
+            SubtractRedeemPrefab();
+        }
+        string jsonData = PlayerPrefs.GetString(saveKey1, string.Empty);
+        if (string.IsNullOrEmpty(jsonData))
+        {
+            Debug.Log("Empty Redeem List"); // Return an empty list if no data saved
+        }
+        else
+        {
+            // Deserialize the JSON string into a list of JObjects
+            List<JObject> serializedPairs = JsonConvert.DeserializeObject<List<JObject>>(jsonData);
 
-                // Create a new list to hold loaded redeemPair objects
-                List<RedeemSensationPair> loadedPairs = new List<RedeemSensationPair>();
+            // Create a new list to hold loaded redeemPair objects
+            List<RedeemSensationPair> loadedPairs = new();
 
-                // Process each serialized JObject
-                foreach (JObject serializedPair in serializedPairs)
+            // Process each serialized JObject
+            foreach (JObject serializedPair in serializedPairs)
+            {
+                GameObject redeemReference = Instantiate(redeemPrefab, redeemList);
+                // Create a new redeemPair instance
+                RedeemSensationPair redeemPair = new()
                 {
-                    GameObject redeemReference = Instantiate(redeemPrefab, redeemList);
-                    // Create a new redeemPair instance
-                    RedeemSensationPair redeemPair = new()
-                    {
-                        redeemNameInputField = redeemReference.transform.GetChild(0).GetComponent<TMP_InputField>(),
-                        sensationDropdown = redeemReference.transform.GetChild(1).GetComponent<TMP_Dropdown>(),
-                        // Extract values from the JObject properties
-                        redeemName = serializedPair.Value<string>("redeemName"),
-                        sensationDropdownValue = serializedPair.Value<int>("sensationDropdownValue")
-                    };
-                    redeemPrefabList.Add(redeemReference);
-                    redeemReference.transform.GetChild(1).GetComponent<DropdownPopulator>().LoadDropdownValue(redeemPair.sensationDropdownValue);
-                    redeemPair.SetValuesToUI();
-                    loadedPairs.Add(redeemPair);
-                }
-
-                redeemPairs = loadedPairs;
+                    redeemNameInputField = redeemReference.transform.GetChild(0).GetComponent<TMP_InputField>(),
+                    sensationDropdown = redeemReference.transform.GetChild(1).GetComponent<TMP_Dropdown>(),
+                    // Extract values from the JObject properties
+                    redeemName = serializedPair.Value<string>("redeemName"),
+                    sensationDropdownValue = serializedPair.Value<int>("sensationDropdownValue")
+                };
+                redeemPrefabList.Add(redeemReference);
+                redeemReference.transform.GetChild(1).GetComponent<DropdownPopulator>().LoadDropdownValue(redeemPair.sensationDropdownValue);
+                redeemPair.SetValuesToUI();
+                loadedPairs.Add(redeemPair);
             }
-            int prefabCount2 = bitPrefabList.Count;
-            for (int i = 0; i < prefabCount2; i++)
-            {
-                SubtractBitPrefab();
-            }
-            jsonData = PlayerPrefs.GetString(saveKey2, string.Empty);
-            if (string.IsNullOrEmpty(jsonData))
-            {
-                Debug.Log("Empty Bit List"); // Return an empty list if no data saved
-            }
-            else
-            {
-                // Deserialize the JSON string into a list of JObjects
-                List<JObject> serializedPairs = JsonConvert.DeserializeObject<List<JObject>>(jsonData);
 
-                // Create a new list to hold loaded bitpair objects
-                List<RedeemSensationPair> loadedPairs = new List<RedeemSensationPair>();
+            redeemPairs = loadedPairs;
+        }
+        int prefabCount2 = bitPrefabList.Count;
+        for (int i = 0; i < prefabCount2; i++)
+        {
+            SubtractBitPrefab();
+        }
+        jsonData = PlayerPrefs.GetString(saveKey2, string.Empty);
+        if (string.IsNullOrEmpty(jsonData))
+        {
+            Debug.Log("Empty Bit List"); // Return an empty list if no data saved
+        }
+        else
+        {
+            // Deserialize the JSON string into a list of JObjects
+            List<JObject> serializedPairs = JsonConvert.DeserializeObject<List<JObject>>(jsonData);
 
-                // Process each serialized JObject
-                foreach (JObject serializedPair in serializedPairs)
+            // Create a new list to hold loaded bitpair objects
+            List<RedeemSensationPair> loadedPairs = new();
+
+            // Process each serialized JObject
+            foreach (JObject serializedPair in serializedPairs)
+            {
+                GameObject redeemReference = Instantiate(bitPrefab, bitList);
+                // Create a new bitpair instance
+                RedeemSensationPair bitPair = new()
                 {
-                    GameObject redeemReference = Instantiate(bitPrefab, bitList);
-                    // Create a new bitpair instance
-                    RedeemSensationPair bitPair = new()
-                    {
-                        redeemNameInputField = redeemReference.transform.GetChild(0).GetComponent<TMP_InputField>(),
-                        sensationDropdown = redeemReference.transform.GetChild(1).GetComponent<TMP_Dropdown>(),
-                        // Extract values from the JObject properties
-                        redeemName = serializedPair.Value<string>("redeemName"),
-                        sensationDropdownValue = serializedPair.Value<int>("sensationDropdownValue")
-                    };
-                    bitPrefabList.Add(redeemReference);
-                    redeemReference.transform.GetChild(1).GetComponent<DropdownPopulator>().LoadDropdownValue(bitPair.sensationDropdownValue);
-                    bitPair.SetValuesToUI();
-                    loadedPairs.Add(bitPair);
-                }
-
-                bitPairs = loadedPairs;
+                    redeemNameInputField = redeemReference.transform.GetChild(0).GetComponent<TMP_InputField>(),
+                    sensationDropdown = redeemReference.transform.GetChild(1).GetComponent<TMP_Dropdown>(),
+                    // Extract values from the JObject properties
+                    redeemName = serializedPair.Value<string>("redeemName"),
+                    sensationDropdownValue = serializedPair.Value<int>("sensationDropdownValue")
+                };
+                bitPrefabList.Add(redeemReference);
+                redeemReference.transform.GetChild(1).GetComponent<DropdownPopulator>().LoadDropdownValue(bitPair.sensationDropdownValue);
+                bitPair.SetValuesToUI();
+                loadedPairs.Add(bitPair);
             }
+
+            bitPairs = loadedPairs;
+        }
     }
     public void AddRedeemPrefab()
     {
@@ -988,7 +1111,7 @@ public class TwitchManager : MonoBehaviour
             GameObject lastRedeemPrefab = redeemPrefabList[lastIndex];
             redeemPrefabList.Remove(lastRedeemPrefab);
             redeemPairs.Remove(redeemPairs[lastIndex]);
-            Destroy(lastRedeemPrefab); 
+            Destroy(lastRedeemPrefab);
         }
     }
     public void SubtractBitPrefab()
@@ -999,7 +1122,7 @@ public class TwitchManager : MonoBehaviour
             GameObject lastBitPrefab = bitPrefabList[lastIndex];
             bitPrefabList.Remove(lastBitPrefab);
             bitPairs.Remove(bitPairs[lastIndex]);
-            Destroy(lastBitPrefab); 
+            Destroy(lastBitPrefab);
         }
     }
     private void SendSensationBasedOnDropdown(string dropdown)
@@ -1018,7 +1141,7 @@ public class TwitchManager : MonoBehaviour
     }
     private void SendSensationBasedOnBits(int bitsused)
     {
-        
+
         foreach (var pair in bitPairs)
         {
             if (int.TryParse(pair.redeemNameInputField.text, out int redeemValue) && bitsused == redeemValue)
@@ -1026,7 +1149,7 @@ public class TwitchManager : MonoBehaviour
                 PlayFullSensation(pair.sensationDropdown.options[pair.sensationDropdown.value].text);
             }
         }
-        
+
     }
     public void PlayFullSensation(string filename)
     {
@@ -1039,6 +1162,10 @@ public class TwitchManager : MonoBehaviour
         string fullPath = FindFileInDirectories(filename, directoryPaths);
         if (fullPath == null)
         {
+            if (debugMode)
+            {
+                File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " " + $"File {filename}.json does not exist in any of the directories." + "\n");
+            }
             // Debug.Log($"File {filename}.json does not exist in any of the directories.");
             return;
         }
@@ -1046,7 +1173,7 @@ public class TwitchManager : MonoBehaviour
         AppendedMicroSensations sensationFromJson = JsonUtility.FromJson<AppendedMicroSensations>(jsonData);
         OWO.Send(Sensation.Parse(sensationFromJson.data));
     }
-    public void PlayFullScalingSensation(string filename,int min,int bit)
+    public void PlayFullScalingSensation(string filename, int min, int bit)
     {
         int finalScore = 0;
         string[] directoryPaths =
@@ -1058,6 +1185,10 @@ public class TwitchManager : MonoBehaviour
         string fullPath = FindFileInDirectories(filename, directoryPaths);
         if (fullPath == null)
         {
+            if (debugMode)
+            {
+                File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " " + $"File {filename}.json does not exist in any of the directories." + "\n");
+            }
             // Debug.Log($"File {filename}.json does not exist in any of the directories.");
             return;
         }
@@ -1068,7 +1199,7 @@ public class TwitchManager : MonoBehaviour
         int currentIntensity = int.Parse(parts[2]);
         if (bit >= min)
         {
-            double ratio = Math.Min((double)bit / min, 25.0); 
+            double ratio = Math.Min((double)bit / min, 25.0);
             finalScore = (int)Math.Round(Math.Clamp(
                 currentIntensity + (ratio - 1.0) / (25.0 - 1.0) * (100 - currentIntensity),
                 currentIntensity, 100));
