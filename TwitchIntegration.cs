@@ -38,6 +38,32 @@ public class TwitchManager : MonoBehaviour
     }
     // Twitch EventSub Data
     [Serializable]
+    public class EventSubList
+    {
+        public int total;
+        public List<EventSubData> data;
+    }
+
+    [Serializable]
+    public class EventSubData
+    {
+        public string id;
+        public string status;
+        public string type;
+        public string version;
+        public Transport transport;
+    }
+
+    [Serializable]
+    public class Transport
+    {
+        public string method;
+        public string session_id;
+        public string connected_at;
+        public string disconnected_at;
+    }
+
+    [Serializable]
     private class TwitchResponseData
     {
         public Metadata metadata;
@@ -168,6 +194,46 @@ public class TwitchManager : MonoBehaviour
 #if !UNITY_WEBGL || UNITY_EDITOR
         ws?.DispatchMessageQueue();
 #endif
+        if (!welcomeMessageReceived)
+            return;
+
+        keepAliveTimer -= Time.deltaTime;
+
+        if (keepAliveTimer > 0f)
+            return;
+
+        if (keepAliveMessageReceived)
+        {
+            // Heartbeat received → reset timer
+            keepAliveTimer = keepAliveTimeout;
+            keepAliveMessageReceived = false;
+        }
+        else
+        {
+            HandleKeepAliveFailure();
+        }
+    }
+    private async void HandleKeepAliveFailure()
+    {
+        if (!welcomeMessageReceived)
+            return;
+
+        welcomeMessageReceived = false;
+        Debug.LogError("EventSub keepalive timeout.");
+        File.AppendAllText(fullDebugPath, DateTime.Now + " EventSub keepalive timeout.\n");
+
+        // Close old WebSocket if it's still open
+        if (ws != null && ws.State == WebSocketState.Open)
+        {
+            try
+            {
+                await ws.Close();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Failed to close old WebSocket cleanly: {ex}");
+            }
+        }
     }
     private static bool serverStarted = false;
 
@@ -274,6 +340,7 @@ public class TwitchManager : MonoBehaviour
     }
     bool isRefreshing = false;
     bool hasTokenTimer = false;
+
     async Task RefreshAccessTokenAsync()
     {
         if (isRefreshing) return;
@@ -310,6 +377,8 @@ public class TwitchManager : MonoBehaviour
                 tokenExpiresAt = DateTime.UtcNow.AddSeconds(token.expires_in);
 
                 Debug.Log("Twitch token refreshed successfully");
+                File.AppendAllText(fullDebugPath, DateTime.Now + " " + "Twitch token refreshed successfully" + "\n");
+                _ = ValidateTokenAsync(savedToken);
             });
 
         }
@@ -340,8 +409,8 @@ public class TwitchManager : MonoBehaviour
         {
             File.AppendAllText(fullDebugPath, DateTime.Now + " " + safeLog + "\n");
         }
+        
     }
-
     private string savedToken;
     private string savedRefreshToken;
     private DateTime tokenExpiresAt;
@@ -539,7 +608,6 @@ public class TwitchManager : MonoBehaviour
     }
     public void InitiateOAuth()
     {
-        string clientId = "vdawpon1s1za6ioint1wqyx3mqqhy3";
         string redirectUri = "http://localhost:12345/callback/";
         string scopes = string.Join(" ", new[]
         {
@@ -586,11 +654,15 @@ public class TwitchManager : MonoBehaviour
     }
 
     private string websocketSessionId = "";
+    private int keepAliveTimeout;
+    private float keepAliveTimer;
+    private bool welcomeMessageReceived = false;
+    private bool keepAliveMessageReceived = false;
 
     private IEnumerator SendSubscriptionRequest()
     {
         string jsonPayload = "";
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 8; i++)
         {
             if (channelIDNumber <= 0 || string.IsNullOrEmpty(websocketSessionId))
             {
@@ -639,6 +711,18 @@ public class TwitchManager : MonoBehaviour
                 //  Debug.Log("Channel Train payload");
                 type = "Hype Train";
             }
+            if (i == 6)
+            {
+                jsonPayload = $"{{\"type\":\"channel.subscription.gift\",\"version\":\"1\",\"condition\":{{\"broadcaster_user_id\":\"{channelIDNumber}\"}},\"transport\":{{\"method\":\"websocket\",\"session_id\":\"{websocketSessionId}\"}}}}";
+                //  Debug.Log("Channel Subscribe payload");
+                type = "Subscribe gift";
+            }
+            if (i == 7)
+            {
+                jsonPayload = $"{{\"type\":\"channel.subscription.message\",\"version\":\"1\",\"condition\":{{\"broadcaster_user_id\":\"{channelIDNumber}\"}},\"transport\":{{\"method\":\"websocket\",\"session_id\":\"{websocketSessionId}\"}}}}";
+                //  Debug.Log("Channel Subscribe payload");
+                type = "Subscribe resubscribe";
+            }
             var request = new UnityWebRequest(url, "POST");
             byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonPayload);
             request.uploadHandler = new UploadHandlerRaw(bodyRaw);
@@ -665,30 +749,103 @@ public class TwitchManager : MonoBehaviour
         }
         _ = ValidateTokenAsync(savedToken);
     }
+    async Task CheckSubscriptionsAsync()
+    {
+        using var http = new HttpClient();
+        http.DefaultRequestHeaders.Add("Authorization", $"Bearer {savedToken}");
+        http.DefaultRequestHeaders.Add("Client-Id", clientId);
+
+        var response = await http.GetAsync("https://api.twitch.tv/helix/eventsub/subscriptions");
+        var json = await response.Content.ReadAsStringAsync();
+
+        // Deserialize Twitch response
+        EventSubList eventSubs = JsonUtility.FromJson<EventSubList>(json);
+        if (eventSubs?.data == null) return;
+
+        // Find all disconnected subscriptions
+        var disconnectedIds = eventSubs.data
+            .Where(sub => sub.status == "websocket_disconnected")
+            .Select(sub => sub.id)
+            .ToList();
+
+        // Delete them **sequentially** and wait
+        foreach (var subId in disconnectedIds)
+        {
+            //Debug.Log("Deleting disconnected subscription: " + subId);
+            await DeleteSubscriptionAsync(subId);
+        }
+
+        Debug.Log("All disconnected subscriptions cleared. You can now start new subscriptions.");
+        StartCoroutine(SendSubscriptionRequest());
+    }
+    public Task DeleteSubscriptionAsync(string subscriptionId)
+    {
+        var tcs = new TaskCompletionSource<bool>();
+        StartCoroutine(DeleteSubscriptionCoroutine(subscriptionId, tcs));
+        return tcs.Task;
+    }
+    private IEnumerator DeleteSubscriptionCoroutine(string subscriptionId, TaskCompletionSource<bool> tcs)
+    {
+        string url = $"https://api.twitch.tv/helix/eventsub/subscriptions?id={subscriptionId}";
+
+        using UnityWebRequest request = UnityWebRequest.Delete(url);
+        request.SetRequestHeader("Authorization", $"Bearer {savedToken}");
+        request.SetRequestHeader("Client-Id", clientId);
+
+        yield return request.SendWebRequest();
+
+        if (request.result == UnityWebRequest.Result.Success)
+        {
+            //Debug.Log("Deleted subscription successfully: " + subscriptionId);
+        }
+        else
+        {
+            string errorMsg = request.downloadHandler != null
+                ? request.downloadHandler.text
+                : request.error; // fallback if no downloadHandler
+            Debug.LogError("Failed to delete subscription: " + errorMsg);
+        }
+
+        // Optional small delay
+        yield return new WaitForSeconds(0.1f);
+        tcs.SetResult(true);
+    }
+
 
     public TMP_Text connectionText;
     public TextMeshProUGUI minBitValueText;
     private void HandleOpen()
     {
         connectionText.text = "Twitch Is Connected";
+        connectionText.color = new Color32(57, 255, 20, 255); //neon green
+        var mat = connectionText.fontMaterial;
+
+        mat.EnableKeyword("GLOW_ON");
+        mat.SetFloat("_GlowPower", 1.2f);
+        mat.SetFloat("_GlowOuter", 0.35f);
+        mat.SetColor("_GlowColor", Color.green);
+
     }
     private List<string> usersHaveFollowed = new();
 
     private bool debugMode = false;
+    static string Clean(string s) => new(s.Where(char.IsDigit).ToArray());
     private void HandleMessage(byte[] bytes)
     {
         var messageStr = Encoding.UTF8.GetString(bytes);
 
 
         TwitchResponseData incomingMessage = JsonConvert.DeserializeObject<TwitchResponseData>(messageStr);
-
-        if (incomingMessage.metadata.message_type != "session_keepalive" && debugMode)
+        string subscriptionType = incomingMessage.metadata.subscription_type;
+        string messageType = incomingMessage.metadata.message_type;
+        keepAliveMessageReceived = true;
+        if (messageType != "session_keepalive" && debugMode)
         {
             File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " " + messageStr + "\n");
         }
-        if (incomingMessage.metadata.message_type == "notification")
+        if (messageType == "notification")
         {
-            if (incomingMessage.metadata.subscription_type == "channel.follow")
+            if (subscriptionType == "channel.follow")
             {
                 if (enableFollow)
                 {
@@ -714,7 +871,7 @@ public class TwitchManager : MonoBehaviour
                     File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Follows Sensation is Disabled" + "\n");
                 }
             }
-            if (incomingMessage.metadata.subscription_type == "channel.raid")
+            if (subscriptionType == "channel.raid")
             {
                 if (enableRaid)
                 {
@@ -729,9 +886,8 @@ public class TwitchManager : MonoBehaviour
                     File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Raid Sensation is Disabled" + "\n");
                 }
             }
-            if (incomingMessage.metadata.subscription_type == "channel.cheer")
+            if (subscriptionType == "channel.cheer")
             {
-                static string Clean(string s) => new(s.Where(char.IsDigit).ToArray());
                 int bitValue = int.Parse(incomingMessage.payload.eventData.bits);
                 int minBitValue = int.Parse(Clean(minBitValueText.text));
                 if (!enableScalingBit)
@@ -751,7 +907,9 @@ public class TwitchManager : MonoBehaviour
                     }
                 }
             }
-            if (incomingMessage.metadata.subscription_type == "channel.subscribe")
+            if (subscriptionType == "channel.subscribe" ||
+                subscriptionType == "channel.subscription.gift" ||
+                subscriptionType == "channel.subscription.message")
             {
                 if (enableSubscribe)
                 {
@@ -766,7 +924,7 @@ public class TwitchManager : MonoBehaviour
                     File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Subscribe Sensation is Disabled" + "\n");
                 }
             }
-            if (incomingMessage.metadata.subscription_type == "channel.channel_points_custom_reward_redemption.add")
+            if (subscriptionType == "channel.channel_points_custom_reward_redemption.add")
             {
                 SendSensationBasedOnRedeem(incomingMessage.payload.eventData.reward.title);
                 if (debugMode)
@@ -774,7 +932,7 @@ public class TwitchManager : MonoBehaviour
                     File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Point Redeem Sensation Sent" + "\n");
                 }
             }
-            if (incomingMessage.metadata.subscription_type == "channel.hype_train.begin")
+            if (subscriptionType == "channel.hype_train.begin")
             {
                 if (enableHype)
                 {
@@ -790,7 +948,7 @@ public class TwitchManager : MonoBehaviour
                 }
             }
         }
-        else if (incomingMessage.metadata.message_type == "session_welcome")
+        else if (messageType == "session_welcome")
         {
             string content =
                     $" Twitch Session Started. " +
@@ -802,8 +960,14 @@ public class TwitchManager : MonoBehaviour
                     "\n";
             if (incomingMessage != null && incomingMessage.payload != null && incomingMessage.payload.session != null)
             {
+
                 websocketSessionId = incomingMessage.payload.session.id;
-                StartCoroutine(SendSubscriptionRequest());
+                keepAliveTimeout = incomingMessage.payload.session.keepalive_timeout_seconds;
+                keepAliveTimer = keepAliveTimeout;
+                welcomeMessageReceived = true;
+                _ = CheckSubscriptionsAsync();
+                //StartCoroutine(DeleteSubscriptionCoroutine(websocketSessionId));
+                //StartCoroutine(SendSubscriptionRequest());
                 if (debugMode)
                 {
                     File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + content);
@@ -818,7 +982,7 @@ public class TwitchManager : MonoBehaviour
             }
 
         }
-        else if (incomingMessage.metadata.message_type == "session_reconnect")
+        else if (messageType == "session_reconnect")
         {
             ConnectToEventSub(true, incomingMessage.payload.session.reconnect_url);
             if (debugMode)
@@ -849,6 +1013,15 @@ public class TwitchManager : MonoBehaviour
                 File.AppendAllText(fullDebugPath, DateTime.Now.ToString() + " Disconnected from Twitch EventSub. Close Code:" + reason + "\n");
             }
             connectionText.text = "Twitch Is Disconnected";
+            connectionText.color = new Color32(255, 40, 40, 255); //neon red
+            var mat = connectionText.fontMaterial;
+
+            mat.EnableKeyword("GLOW_ON");
+            mat.SetFloat("_GlowPower", 1.2f);
+            mat.SetFloat("_GlowOuter", 0.35f);
+            mat.SetColor("_GlowColor", Color.red);
+
+            ConnectToEventSub(false);
         });
     }
 
@@ -870,19 +1043,14 @@ public class TwitchManager : MonoBehaviour
         }
     }
     public void SendTestButton()
-    { /*
-        static string Clean(string s) => new(s.Where(char.IsDigit).ToArray());
-        int bitValue = int.Parse(Clean(testBitsInputField.text));
-        int minBitValue = int.Parse(Clean(minBitValueText.text));
-        PlayFullScalingSensation(bitDropdown.captionText.text, minBitValue, bitValue);
-      */
+    { 
         if (testRedeemInputField.text.Length > 0)
         {
             SendSensationBasedOnRedeem(testRedeemInputField.text.ToLower());
         }
         if (testBitsInputField.text.Length > 0)
         {
-            int.TryParse(testBitsInputField.text, out int redeemValue);
+            int.TryParse(Clean(testBitsInputField.text), out int redeemValue);
             SendSensationBasedOnBits(redeemValue);
         }
     }
@@ -1158,7 +1326,6 @@ public class TwitchManager : MonoBehaviour
         "Assets/OWO/Sensation Events",
         "Assets/OWO/MicroSensation Events"
     };
-
         string fullPath = FindFileInDirectories(filename, directoryPaths);
         if (fullPath == null)
         {
