@@ -21,11 +21,6 @@ public class TwitchManager : MonoBehaviour
 {
     // Web info 
     [Serializable]
-    public class TokenData
-    {
-        public string token;
-    }
-    [Serializable]
     public class ResponseData
     {
         public UserData[] data;
@@ -43,7 +38,6 @@ public class TwitchManager : MonoBehaviour
         public int total;
         public List<EventSubData> data;
     }
-
     [Serializable]
     public class EventSubData
     {
@@ -53,7 +47,6 @@ public class TwitchManager : MonoBehaviour
         public string version;
         public Transport transport;
     }
-
     [Serializable]
     public class Transport
     {
@@ -62,14 +55,12 @@ public class TwitchManager : MonoBehaviour
         public string connected_at;
         public string disconnected_at;
     }
-
     [Serializable]
     private class TwitchResponseData
     {
         public Metadata metadata;
         public Payload payload;
     }
-
     [Serializable]
     private class Metadata
     {
@@ -79,7 +70,6 @@ public class TwitchManager : MonoBehaviour
         public string subscription_type;
         public string subscription_version;
     }
-
     [Serializable]
     private class Payload
     {
@@ -89,7 +79,6 @@ public class TwitchManager : MonoBehaviour
         public EventData eventData;
         public SessionData session_reconnect;
     }
-
     [Serializable]
     private class SessionData
     {
@@ -99,7 +88,6 @@ public class TwitchManager : MonoBehaviour
         public int keepalive_timeout_seconds;
         public string reconnect_url;
     }
-
     [Serializable]
     private class SubscriptionData
     {
@@ -112,14 +100,12 @@ public class TwitchManager : MonoBehaviour
         public TransportData transport;
         public string created_at;
     }
-
     [Serializable]
     private class ConditionData
     {
         public string broadcaster_user_id;
         public string user_id;
     }
-
     [Serializable]
     private class TransportData
     {
@@ -161,9 +147,6 @@ public class TwitchManager : MonoBehaviour
         public int expires_in;
         public string[] scopes;
     }
-
-
-
     private readonly ConcurrentQueue<Action> _mainThreadActions = new();
     private readonly string filePath = "TwitchOWOLogs.txt";
     private string fullDebugPath;
@@ -236,7 +219,6 @@ public class TwitchManager : MonoBehaviour
         }
     }
     private static bool serverStarted = false;
-
     void StartLocalServer()
     {
         if (serverStarted) return;
@@ -340,7 +322,6 @@ public class TwitchManager : MonoBehaviour
     }
     bool isRefreshing = false;
     bool hasTokenTimer = false;
-
     async Task RefreshAccessTokenAsync()
     {
         if (isRefreshing) return;
@@ -414,12 +395,11 @@ public class TwitchManager : MonoBehaviour
     private string savedToken;
     private string savedRefreshToken;
     private DateTime tokenExpiresAt;
+    private int channelIDNumber = 0;
     private void FetchUserData(string token)
     {
         StartCoroutine(GetUserDataCoroutine(token));
     }
-
-    private int channelIDNumber = 0;
     private IEnumerator GetUserDataCoroutine(string token)
     {
         string url = "https://api.twitch.tv/helix/users";
@@ -488,7 +468,7 @@ public class TwitchManager : MonoBehaviour
     [SerializeField]
     private TextMeshProUGUI testBitsInputField;
     private WebSocket ws;
-    public bool enableFollow = false;
+    private bool enableFollow = false;
     private bool enableRaid = false;
     private bool enableHype = false;
     private bool enableSubscribe = false;
@@ -629,7 +609,6 @@ public class TwitchManager : MonoBehaviour
     }
     // EventSub Connection
     private const string EVENTSUB_ENDPOINT = "wss://eventsub.wss.twitch.tv/ws";
-
     public async void ConnectToEventSub(bool recconnecting, string newEndpoint = null)
     {
         var headers = new Dictionary<string, string>
@@ -652,13 +631,11 @@ public class TwitchManager : MonoBehaviour
 
         await ws.Connect(); // Connect to the WebSocket endpoint
     }
-
     private string websocketSessionId = "";
     private int keepAliveTimeout;
     private float keepAliveTimer;
     private bool welcomeMessageReceived = false;
     private bool keepAliveMessageReceived = false;
-
     private IEnumerator SendSubscriptionRequest()
     {
         string jsonPayload = "";
@@ -787,11 +764,9 @@ public class TwitchManager : MonoBehaviour
     private IEnumerator DeleteSubscriptionCoroutine(string subscriptionId, TaskCompletionSource<bool> tcs)
     {
         string url = $"https://api.twitch.tv/helix/eventsub/subscriptions?id={subscriptionId}";
-
         using UnityWebRequest request = UnityWebRequest.Delete(url);
         request.SetRequestHeader("Authorization", $"Bearer {savedToken}");
         request.SetRequestHeader("Client-Id", clientId);
-
         yield return request.SendWebRequest();
 
         if (request.result == UnityWebRequest.Result.Success)
@@ -805,13 +780,10 @@ public class TwitchManager : MonoBehaviour
                 : request.error; // fallback if no downloadHandler
             Debug.LogError("Failed to delete subscription: " + errorMsg);
         }
-
         // Optional small delay
         yield return new WaitForSeconds(0.1f);
         tcs.SetResult(true);
     }
-
-
     public TMP_Text connectionText;
     public TextMeshProUGUI minBitValueText;
     private void HandleOpen()
@@ -827,14 +799,11 @@ public class TwitchManager : MonoBehaviour
 
     }
     private List<string> usersHaveFollowed = new();
-
     private bool debugMode = false;
     static string Clean(string s) => new(s.Where(char.IsDigit).ToArray());
     private void HandleMessage(byte[] bytes)
     {
         var messageStr = Encoding.UTF8.GetString(bytes);
-
-
         TwitchResponseData incomingMessage = JsonConvert.DeserializeObject<TwitchResponseData>(messageStr);
         string subscriptionType = incomingMessage.metadata.subscription_type;
         string messageType = incomingMessage.metadata.message_type;
@@ -1024,22 +993,12 @@ public class TwitchManager : MonoBehaviour
             ConnectToEventSub(false);
         });
     }
-
     private async void OnDestroy()
     {
         if (ws != null)
         {
             await ws.Close();
             ws = null;
-        }
-    }
-
-    public void RePopDropDowns()
-    {
-        DropdownPopulator[] dropdownPopulators = FindObjectsByType<DropdownPopulator>(FindObjectsSortMode.None);
-        foreach (DropdownPopulator dropdownPopulator in dropdownPopulators)
-        {
-            dropdownPopulator.PopulateDropdownWithFilenames();
         }
     }
     public void SendTestButton()
@@ -1075,8 +1034,9 @@ public class TwitchManager : MonoBehaviour
             redeemNameInputField.text = redeemName;
         }
     }
-
+    [HideInInspector]
     public List<RedeemSensationPair> redeemPairs = new();
+    [HideInInspector]
     public List<RedeemSensationPair> bitPairs = new();
 
     public GameObject redeemPrefab;
@@ -1271,7 +1231,7 @@ public class TwitchManager : MonoBehaviour
         bitPrefabList.Add(bitReference);
         bitPairs.Add(bitPair);
     }
-    public void SubtractRedeemPrefab()
+    private void SubtractRedeemPrefab()
     {
         if (redeemPrefabList.Count > 0)
         {
@@ -1282,7 +1242,7 @@ public class TwitchManager : MonoBehaviour
             Destroy(lastRedeemPrefab);
         }
     }
-    public void SubtractBitPrefab()
+    private void SubtractBitPrefab()
     {
         if (bitPrefabList.Count > 0)
         {
@@ -1319,7 +1279,7 @@ public class TwitchManager : MonoBehaviour
         }
 
     }
-    public void PlayFullSensation(string filename)
+    private void PlayFullSensation(string filename)
     {
         string[] directoryPaths =
         {
@@ -1340,7 +1300,7 @@ public class TwitchManager : MonoBehaviour
         AppendedMicroSensations sensationFromJson = JsonUtility.FromJson<AppendedMicroSensations>(jsonData);
         OWO.Send(Sensation.Parse(sensationFromJson.data));
     }
-    public void PlayFullScalingSensation(string filename, int min, int bit)
+    private void PlayFullScalingSensation(string filename, int min, int bit)
     {
         int finalScore = 0;
         string[] directoryPaths =
